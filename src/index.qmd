@@ -1,27 +1,31 @@
 ---
-title: "My Report"
+title: "DSAN 5100 Group 5 Final Project"
 format: html
 ---
 
-## Import Libraries
+# Import Libraries
 ```{r, message=FALSE}
 library(tidyverse)
 library(lubridate)
 library(forecast)
 library(car)
 library(boot)
+library(zoo)
+library(factoextra)
+```
 
+```{r}
 cities <- c(
   "New York", "Los Angeles", "Chicago", "Houston", "Phoenix",
   "Philadelphia", "San Antonio", "San Diego", "Dallas", "San Jose"
 )
 ```
 
-## Load and Clean Data
+# Load and Clean Data
 {{< include data.qmd >}}
 
-## Time Series EDA
+# Time Series EDA
 {{< include time_series.qmd >}}
 
-## Hypothesis Testing
+# Hypothesis Testing
 {{< include hypothesis_testing.qmd >}}            
