@@ -19,6 +19,7 @@ cities <- c(
   "New York", "Los Angeles", "Chicago", "Houston", "Phoenix",
   "Philadelphia", "San Antonio", "San Diego", "Dallas", "San Jose"
 )
+set.seed(5100)
 ```
 
 # Load and Clean Data
@@ -28,4 +29,4 @@ cities <- c(
 {{< include time_series.qmd >}}
 
 # Hypothesis Testing
-{{< include hypothesis_testing.qmd >}}            
+<!-- {{< include hypothesis_testing.qmd >}}             -->
