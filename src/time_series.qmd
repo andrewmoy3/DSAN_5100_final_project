@@ -33,7 +33,9 @@ ggplot(la_long, aes(x = Date, y = Value)) +
 ```
 
 <!-- -------------------------------------------------- -->
-## Convert to Wide Format
+## Format Data
+
+### Create Data Frame
 ```{r}
 pm25_matrix <- air_df_clean %>%
   select(City, Date, PM25) %>%
@@ -54,7 +56,7 @@ no2_matrix <- air_df_clean %>%
 ts_matrix <- cbind(pm25_matrix, o3_matrix, no2_matrix)
 ```
 
-
+### Scale Data
 ```{r}
 # Scale to zero mean and 1 standard deviation (Z-score)
 ts_scaled <- scale(ts_matrix)
@@ -63,15 +65,11 @@ ts_scaled <- scale(ts_matrix)
 na_col_sums <-colSums(is.na(ts_matrix))
 ```
 
-## Clustering
+## Impute Missing Values
 ```{r}
 # km3 <- kmeans(ts_scaled, centers = 3, nstart = 25)
 # km3$cluster
-```
-
-ran into an issue of many NAs and k-means doesn't work well with null values, so we are going to replace the na values with the mean.
-
-```{r}
+# Above code does not work because NAs and k-means doesn't work well with null values, so we are going to replace the na values with the mean.
 ts_matrix_imputed <- ts_matrix %>% 
   apply(1, function(row) na.approx(row, na.rm = FALSE)) %>%
   t()
@@ -79,15 +77,14 @@ ts_matrix_imputed <- apply(ts_matrix_imputed, 1, function(row){
   row[is.na(row)] <- mean(row, na.rm = TRUE)
   row
 }) %>% t()
-sum(is.na(ts_matrix_imputed))
-```
 
-scaling the matrix again:
+sum(is.na(ts_matrix_imputed)) # should be 0
 
-```{r}
+# Rescale
 ts_scaled <- scale(ts_matrix_imputed)
 ```
 
+## Clustering
 ```{r}
 km3 <- kmeans(ts_scaled, centers = 3, nstart = 25)
 km3$cluster
@@ -98,8 +95,8 @@ fviz_cluster(km3, data = ts_scaled, geom = "point", repel = TRUE)
 ```
 
 ## ARIMA 
-test i need to do before ARIMA modelling:
 
+### Test: Is ARIMA valid?
 ```{r}
 # tseries::adf.test(ts_series)
 # ndiffs(ts_series)
@@ -108,6 +105,7 @@ test i need to do before ARIMA modelling:
 
 ```
 
+### ARIMA Modeling, Ljung-Box Test
 ```{r}
 # Cities
 cities <- c(

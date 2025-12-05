@@ -81,7 +81,6 @@ boot_stat_pm25 <- function(data, indices) {
   mean_la - mean_ny
 }
 
-set.seed(123)
 boot_res_pm25 <- boot(data = la_ny_pm25,
                       statistic = boot_stat_pm25,
                       R = 2000)
@@ -153,7 +152,6 @@ boot_stat_o3 <- function(data, indices) {
   mean_ny <- mean(d$O3[d$City == "New York"], na.rm = TRUE)
   mean_la - mean_ny
 }
-set.seed(123)
 boot_res_o3 <- boot(data = la_ny_o3,
                     statistic = boot_stat_o3,
                     R = 2000)
@@ -200,7 +198,6 @@ boot_stat_no2 <- function(data, indices) {
   mean_chicago - mean_houston
 }
 
-set.seed(123)
 boot_res_no2 <- boot(data = chi_hou_no2,
                      statistic = boot_stat_no2,
                      R = 2000)
