@@ -92,7 +92,9 @@ boot.ci(boot_res_pm25, type = c("perc", "bca"))
 
 ## Ozone (O3)
 now testing for ozone across all 10 cities as we did for PM2.5.
+
 ### Individual Cities
+
 #### Levene Test
 
 ```{r}
