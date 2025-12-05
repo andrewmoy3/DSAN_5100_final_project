@@ -1,0 +1,481 @@
+---
+title: "main"
+format: html
+---
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(forecast)
+library(car)
+library(boot)
+
+cities <- c(
+  "New York", "Los Angeles", "Chicago", "Houston", "Phoenix",
+  "Philadelphia", "San Antonio", "San Diego", "Dallas", "San Jose"
+)
+```
+
+```{r}
+pm25_raw <- read_csv("data/daily_88101_2023.csv")
+o3_raw   <- read_csv("data/daily_44201_2023.csv")
+no2_raw  <- read_csv("data/daily_42602_2023.csv")
+
+```
+
+```{r}
+clean_pollutant <- function(df, pollutant_name) {
+  df %>%
+    filter(`City Name` %in% cities) %>%          # filter ROWS by city name
+    mutate(Date = ymd(`Date Local`)) %>%         # convert date
+    select(`City Name`, Date, `Arithmetic Mean`) %>%  # select correct columns
+    rename(
+      City = `City Name`,
+      !!pollutant_name := `Arithmetic Mean`
+    )
+}
+
+pm25 <- clean_pollutant(pm25_raw, "PM25")
+o3   <- clean_pollutant(o3_raw,   "O3")
+no2  <- clean_pollutant(no2_raw,  "NO2")
+
+air_df <- pm25 %>%
+  inner_join(o3, by = c("City", "Date")) %>%
+  inner_join(no2, by = c("City", "Date"))
+
+```
+
+```{r}
+# There are duplicate rows as the indicators have multiple monitoring sites per city. 
+air_df_clean <- air_df %>%
+  group_by(City, Date) %>%
+  summarise(
+    PM25 = mean(PM25, na.rm = TRUE),
+    O3   = mean(O3,   na.rm = TRUE),
+    NO2  = mean(NO2,  na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(City, Date)
+
+glimpse(air_df_clean)
+
+```
+
+3,367 instead of 3,650 because some cities have missing days, some monitoring stations fail to record, etc.
+
+Now, Time-series EDA in R
+
+```{r}
+library(tidyverse)
+
+city_name <- "Los Angeles"
+
+la_df <- air_df %>%
+  filter(City == city_name) %>%
+  arrange(Date)
+
+la_long <- la_df %>%
+  pivot_longer(cols = c(PM25, O3, NO2),
+               names_to = "Pollutant",
+               values_to = "Value")
+
+
+la_long <- air_df_clean %>%
+  filter(City == "Los Angeles") %>%
+  pivot_longer(cols = c(PM25, O3, NO2),
+               names_to = "Pollutant",
+               values_to = "Value")
+
+ggplot(la_long, aes(x = Date, y = Value)) +
+  geom_line(color = "steelblue") +
+  facet_wrap(~ Pollutant, scales = "free_y", ncol = 1) +
+  labs(
+    title = "Daily Pollution Levels in Los Angeles (2023)",
+    x = "Date",
+    y = "Concentration"
+  ) +
+  theme_minimal(base_size = 14)
+
+```
+
+**Hypothesis Testing**
+
+```{r}
+air_df <- air_df %>%
+  mutate(
+    Region = case_when(
+      City %in% c("New York", "Philadelphia") ~ "East",
+      City %in% c("Los Angeles", "San Diego") ~ "West",
+      TRUE ~ "Other"
+    )
+  )
+
+east_pm25 <- air_df %>% filter(Region == "East") %>% pull(PM25)
+west_pm25 <- air_df %>% filter(Region == "West") %>% pull(PM25)
+
+t.test(east_pm25, west_pm25, var.equal = FALSE)
+
+```
+
+```{r}
+shapiro.test(sample(east_pm25, 500))  
+shapiro.test(sample(west_pm25, 500))
+
+```
+
+Both p-values are way below 0.05, so we reject the null hypothesis of normality. both distributions are not normally distributed. So we can't trust a standard t-test, so instead we will use Wilcoxon rank-sum test.
+
+```{r}
+wilcox.test(east_pm25, west_pm25)
+```
+
+Since the p-value is way below 0.05, you reject the null hypothesis and this tells us there is a statistically significant evidence that PM2.5 levels between East and West cities are different. We can see the median values to see which region has higher PM2.5:
+
+```{r}
+median(east_pm25, na.rm = TRUE)
+median(west_pm25, na.rm = TRUE)
+
+```
+
+The difference is not huge it is slight, but with the wildfires, we would expect this same pattern and even more exacerbated that the west has higher pm25 levels.
+
+```{r}
+# Check equal variances first
+leveneTest(PM25 ~ City, data = air_df)
+
+anova_fit <- aov(PM25 ~ City, data = air_df)
+summary(anova_fit)
+
+```
+
+The null hypothesis tells us that Levene's test is testing that all groups have equal variances. Since the p value is way below 0.05, we reject the null hypothesis which means variances differ significantly across the 10 cities. Homogeniety of variances is violated.
+
+```{r}
+kruskal.test(PM25 ~ City, data = air_df_clean)
+
+```
+
+Because both normality and equal variances assumptions were violated, we used Kruskal-Wallis test to compare PM2.5 levels across the ten major cities. The test is showing a highly significant result as the p-value is way below 0.05. This shows then that the PM2.5 concentration levels differ substantially across these cities. There is a meaningful variation in urban air quality patterns across the country.
+
+now testing for ozone across all 10 cities as we did for PM2.5.
+
+```{r}
+library(car)
+leveneTest(O3 ~ City, data = air_df_clean)
+```
+
+Same as PM2.5, p-value is less than 0.05 so ANOVA assumption is violated, we must use kruskal-wallis.
+
+```{r}
+anova_o3 <- aov(O3 ~ City, data = air_df_clean)
+summary(anova_o3)
+```
+
+The p-value here is small so although evidence may show O3 levels vary across cities, we can't trust ANOVA since the assumptions were violated.
+
+```{r}
+kruskal.test(O3 ~ City, data = air_df_clean)
+```
+
+P-value is also way below 0.05, so median O3 levels differ significantly across cities.
+
+```{r}
+la_o3 <- air_df_clean %>% filter(City == "Los Angeles") %>% pull(O3)
+ny_o3 <- air_df_clean %>% filter(City == "New York") %>% pull(O3)
+
+wilcox.test(la_o3, ny_o3)
+
+```
+
+```{r}
+wilcox.test(
+  air_df_clean$O3[air_df_clean$City == "Los Angeles"],
+  air_df_clean$O3[air_df_clean$City == "New York"]
+)
+
+```
+
+```{r}
+air_df_clean %>%
+  group_by(City) %>%
+  summarise(median_O3 = median(O3, na.rm = TRUE)) %>%
+  arrange(desc(median_O3))
+
+```
+
+For NO2:
+
+```{r}
+library(car)
+
+leveneTest(NO2 ~ City, data = air_df_clean)
+
+anova_no2 <- aov(NO2 ~ City, data = air_df_clean)
+summary(anova_no2)
+
+```
+
+```{r}
+kruskal.test(NO2 ~ City, data = air_df_clean)
+
+```
+
+```{r}
+library(boot)
+
+la_ny_pm25 <- air_df_clean %>%
+  filter(City %in% c("Los Angeles", "New York"))
+
+boot_stat_pm25 <- function(data, indices) {
+  d <- data[indices, ]
+  mean_la  <- mean(d$PM25[d$City == "Los Angeles"], na.rm = TRUE)
+  mean_ny  <- mean(d$PM25[d$City == "New York"],   na.rm = TRUE)
+  mean_la - mean_ny
+}
+
+set.seed(123)
+boot_res_pm25 <- boot(data = la_ny_pm25,
+                      statistic = boot_stat_pm25,
+                      R = 2000)
+
+boot_res_pm25
+boot.ci(boot_res_pm25, type = c("perc", "bca"))
+
+```
+
+```{r}
+la_ny_o3 <- air_df_clean %>%
+  filter(City %in% c("Los Angeles", "New York"))
+boot_stat_o3 <- function(data, indices) {
+  d <- data[indices, ]
+  mean_la <- mean(d$O3[d$City == "Los Angeles"], na.rm = TRUE)
+  mean_ny <- mean(d$O3[d$City == "New York"], na.rm = TRUE)
+  mean_la - mean_ny
+}
+set.seed(123)
+boot_res_o3 <- boot(data = la_ny_o3,
+                    statistic = boot_stat_o3,
+                    R = 2000)
+
+boot_res_o3
+boot.ci(boot_res_o3, type = c("perc", "bca"))
+
+```
+
+```{r}
+chi_hou_no2 <- air_df_clean %>% 
+  filter(City %in% c("Chicago", "Houston"))
+
+wilcox.test(NO2 ~ City, data = chi_hou_no2)
+
+```
+
+```{r}
+boot_stat_no2 <- function(data, indices) {
+  d <- data[indices, ]
+  mean_chicago <- mean(d$NO2[d$City == "Chicago"], na.rm = TRUE)
+  mean_houston <- mean(d$NO2[d$City == "Houston"], na.rm = TRUE)
+  mean_chicago - mean_houston
+}
+
+set.seed(123)
+boot_res_no2 <- boot(data = chi_hou_no2,
+                     statistic = boot_stat_no2,
+                     R = 2000)
+
+boot_res_no2
+boot.ci(boot_res_no2, type = c("perc", "bca"))
+
+```
+
+> \
+> To quantify differences in nitrogen dioxide (NO₂) exposure between Chicago and Houston, we conducted a nonparametric bootstrap with 2,000 resamples. The observed difference in mean NO₂ was 2.58 ppb, with Chicago exhibiting higher levels.
+>
+> The 95% percentile bootstrap interval (1.36, 3.87) and the BCa interval (1.45, 3.95) both excluded zero, indicating strong statistical evidence that Chicago’s mean NO₂ concentration is higher than Houston’s.
+>
+> This difference is not only statistically significant but also meaningful in a public-health context. NO₂ differences of 2–4 ppb have been associated with increased risks of asthma exacerbations, respiratory stress, and emergency department visits. The findings reflect underlying differences in traffic density, atmospheric conditions, and industrial structure between the two metropolitan areas.
+
+```{r}
+air_df_clean %>%
+  filter(City %in% c("Chicago", "Houston")) %>%
+  mutate(Month = month(Date, label = TRUE)) %>%
+  group_by(City, Month) %>%
+  summarise(mean_NO2 = mean(NO2, na.rm = TRUE)) %>%
+  ggplot(aes(Month, mean_NO2, group = City, color = City)) +
+  geom_line(size = 1.2)
+
+```
+
+Warm air → more vertical mixing → pollution disperses\
+
+Cold air → less mixing → pollution stays trapped near surface
+
+# lets check on weekdays
+
+```{r}
+air_df_clean <- air_df_clean %>%
+  mutate(Weekday = wday(Date, label = TRUE, week_start = 1))
+air_df_clean %>%
+  filter(City %in% c("Chicago", "Houston")) %>%
+  group_by(City, Weekday) %>%
+  summarise(mean_NO2 = mean(NO2, na.rm = TRUE)) %>%
+  ggplot(aes(Weekday, mean_NO2, color = City, group = City)) +
+  geom_line(size = 1.2) +
+  labs(title = "Weekday vs Weekend NO₂ Levels", y = "Mean NO₂ (ppb)") +
+  theme_minimal(base_size = 14)
+
+```
+
+```{r}
+air_df_clean <- air_df_clean %>%
+  mutate(
+    day_type = ifelse(Weekday %in% c("Sat", "Sun"), "Weekend", "Weekday")
+  )
+chi_week <- air_df_clean %>% filter(City == "Chicago")
+wilcox.test(NO2 ~ day_type, data = chi_week)
+hou_week <- air_df_clean %>% filter(City == "Houston")
+wilcox.test(NO2 ~ day_type, data = hou_week)
+```
+
+for Chicago, it is not statistically significant at 5 percent. For Houston, it is highly significant. houston shows strong weekday \> weekend NO2. So, NO2 rises with weekday commuting and falls on weekends. Traffic drives NO₂, but *meteorology (weather, winds, etc) determines how much* it shows up in air quality.
+
+```{r}
+pm25_matrix <- air_df_clean %>%
+  select(City, Date, PM25) %>%
+  pivot_wider(names_from = Date, values_from = PM25) %>%
+  column_to_rownames("City")
+```
+
+```{r}
+o3_matrix <- air_df_clean %>%
+  select(City, Date, O3) %>%
+  pivot_wider(names_from = Date, values_from = O3) %>%
+  column_to_rownames("City")
+
+no2_matrix <- air_df_clean %>%
+  select(City, Date, NO2) %>%
+  pivot_wider(names_from = Date, values_from = NO2) %>%
+  column_to_rownames("City")
+```
+
+```{r}
+ts_matrix <- cbind(pm25_matrix, o3_matrix, no2_matrix)
+```
+
+```{r}
+ts_scaled <- scale(ts_matrix)
+colSums(is.na(ts_matrix))
+```
+
+```{r}
+set.seed(123)
+# km3 <- kmeans(ts_scaled, centers = 3, nstart = 25)
+# km3$cluster
+
+```
+
+ran into an issue of many NAs and k-means doesn't work well with null values, so we are going to replace the na values with the mean.
+
+```{r}
+library(zoo)
+
+ts_matrix_imputed <- ts_matrix %>% 
+  apply(1, function(row) na.approx(row, na.rm = FALSE)) %>%
+  t()
+ts_matrix_imputed <- apply(ts_matrix_imputed, 1, function(row){
+  row[is.na(row)] <- mean(row, na.rm = TRUE)
+  row
+}) %>% t()
+sum(is.na(ts_matrix_imputed))
+```
+
+scaling the matrix again:
+
+```{r}
+ts_scaled <- scale(ts_matrix_imputed)
+```
+
+```{r}
+set.seed(123)
+km3 <- kmeans(ts_scaled, centers = 3, nstart = 25)
+km3$cluster
+```
+
+```{r}
+library(factoextra)
+fviz_cluster(km3, data = ts_scaled, geom = "point", repel = TRUE)
+
+```
+
+test i need to do before ARIMA modelling:
+
+```{r}
+# tseries::adf.test(ts_series)
+# ndiffs(ts_series)
+# nsdiffs(ts_series)
+# checkresiduals(fit)
+
+```
+
+```{r}
+library(forecast)
+library(tidyverse)
+library(lubridate)
+
+# Cities
+cities <- c(
+  "New York", "Los Angeles", "Chicago", "Houston", "Phoenix",
+  "Philadelphia", "San Antonio", "San Diego", "Dallas", "San Jose"
+)
+
+# Pollutants
+pollutants <- c("PM25", "O3", "NO2")
+
+# Storage lists
+arima_models <- list()
+arima_diagnostics <- list()
+arima_forecasts <- list()
+
+# Loop through each city and pollutant
+for (city in cities) {
+  cat("\n===========================\n")
+  cat("CITY:", city, "\n")
+  cat("===========================\n\n")
+
+  city_df <- air_df_clean %>% 
+    filter(City == city) %>% 
+    arrange(Date)
+
+  for (poll in pollutants) {
+
+    cat("---- Pollutant:", poll, "----\n")
+
+    # Extract time series
+    ts_data <- city_df[[poll]]
+
+    # Convert to a daily ts object
+    ts_series <- ts(ts_data, frequency = 365)
+
+    # Fit ARIMA model
+    fit <- auto.arima(ts_series, seasonal = TRUE, stepwise = FALSE, approximation = FALSE)
+
+    # Save model
+    arima_models[[paste(city, poll, sep = "_")]] <- fit
+
+    # Diagnostics
+    diag <- checkresiduals(fit, plot = FALSE)
+    arima_diagnostics[[paste(city, poll, sep = "_")]] <- diag
+
+    # Forecast 30 days ahead
+    fcast <- forecast(fit, h = 30)
+    arima_forecasts[[paste(city, poll, sep = "_")]] <- fcast
+
+    # Print important results
+    cat("ARIMA Model:", fit$arma, "\n")
+    cat("AIC:", fit$aic, "\n")
+    cat("Residual Ljung-Box p-value:", diag$p.value, "\n\n")
+  }
+}
+```
+
+This test shows us that we failed many tests. failing Ljung-Box is extremely common in meterological and pollutant time series. this because the data has strong seasonality, periodic cycles (ARIMA can't model weather shocks), long-memory behavior, non-linear patterns and calendar effects (weekday traffic/holiday). But what about the LJUNG tests above 0.05?
