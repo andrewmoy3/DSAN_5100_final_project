@@ -1,0 +1,33 @@
+```{r}
+library(tidyverse)
+
+city_name <- "Los Angeles"
+
+la_df <- air_df %>%
+  filter(City == city_name) %>%
+  arrange(Date)
+
+la_long <- la_df %>%
+  pivot_longer(cols = c(PM25, O3, NO2),
+               names_to = "Pollutant",
+               values_to = "Value")
+
+
+la_long <- air_df_clean %>%
+  filter(City == "Los Angeles") %>%
+  pivot_longer(cols = c(PM25, O3, NO2),
+               names_to = "Pollutant",
+               values_to = "Value")
+
+ggplot(la_long, aes(x = Date, y = Value)) +
+  geom_line(color = "steelblue") +
+  facet_wrap(~ Pollutant, scales = "free_y", ncol = 1) +
+  labs(
+    title = "Daily Pollution Levels in Los Angeles (2023)",
+    x = "Date",
+    y = "Concentration"
+  ) +
+  theme_minimal(base_size = 14)
+
+```
+

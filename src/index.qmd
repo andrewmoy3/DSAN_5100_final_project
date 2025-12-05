@@ -1,0 +1,27 @@
+---
+title: "My Report"
+format: html
+---
+
+## Import Libraries
+```{r, message=FALSE}
+library(tidyverse)
+library(lubridate)
+library(forecast)
+library(car)
+library(boot)
+
+cities <- c(
+  "New York", "Los Angeles", "Chicago", "Houston", "Phoenix",
+  "Philadelphia", "San Antonio", "San Diego", "Dallas", "San Jose"
+)
+```
+
+## Load and Clean Data
+{{< include data.qmd >}}
+
+## Time Series EDA
+{{< include time_series.qmd >}}
+
+## Hypothesis Testing
+{{< include hypothesis_testing.qmd >}}            
