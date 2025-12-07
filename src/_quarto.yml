@@ -1,9 +1,25 @@
 project:
-  type: default
-  title: TITLE
+  type: website
+  render:
+    - "*.qmd"
+    - "*.ipynb"
+    - "!xtra"
   output-dir: output_dir
 
 format:
   html:
     toc: true
     code-fold: true
+
+website:
+  title: "DSAN-5100: Project"
+  navbar:
+    left:
+      - href: index.qmd
+        text: Home
+      - text: "Code"
+        menu:
+          - text: Cities HT
+            href: cities_ht.ipynb
+          - text: Cities TS
+            href: cities_ts.ipynb
