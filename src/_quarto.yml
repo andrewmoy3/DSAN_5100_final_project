@@ -20,6 +20,22 @@ website:
       - text: "Code"
         menu:
           - text: Cities HT
-            href: cities_ht.ipynb
+            href: cities/cities_ht.ipynb
           - text: Cities TS
-            href: cities_ts.ipynb
+            href: cities/cities_ts.ipynb
+          - text: Temperature HT
+            href: weather/weather_ht.ipynb
+          - text: Temperature Visualization
+            href: weather/weather_plot.ipynb
+          - text: Temperature TS
+            href: weather/weather_ts.ipynb
+          - text: Humidity HT
+            href: humidity/humidity_ht.ipynb
+          # - text: Humidity Visualization
+          #   href: humidity/humidity_plot.ipynb
+          # - text: Humidity TS
+          #   href: humidity/humidity_ts.ipynb
+          - text: Plots
+            href: weather/test.ipynb
+          - text: Bootstrap
+            href: weather/bootstrap.ipynb
