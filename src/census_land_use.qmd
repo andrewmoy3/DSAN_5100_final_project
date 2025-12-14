@@ -1,0 +1,418 @@
+---
+title: "pop_density_ppa"
+format: html
+editor: visual
+---
+
+## Covariates with Pollution Analysis
+
+Let's read in the data from data.gov on census block land use obtained from here: 
+https://catalog.data.gov/dataset/smart-location-database8
+
+This dataset includes variables like land use within cities, population density, and others that we can use to explore what covaries with pollution levels accross cities.
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(forecast)
+library(car)
+library(boot)
+library(zoo)
+
+pop_data_raw <- read_csv("../data/EPA_SmartLocationDatabase_V3_Jan_2021_Final.csv")
+colnames(pop_data_raw)
+```
+
+Now, we select the most relevant variables to pollution.
+
+```{r}
+pop_select <- pop_data_raw |> 
+  select(
+    CBSA_Name,        # city/metro name
+    TotPop,           # total population
+    CountHU,          # housing units
+    TotEmp,           # total employment
+    D1A,              # population density (persons per acre)
+    D2B_E5MIXA,       # land-use mix index for E5 jobs
+    D2B_E8MIXA,       # land-use mix index for E8 jobs
+    D2C_TRPMX1,       # street connectivity / intersection density
+    D3A,              # tree cover percentage (greenspace proxy)
+    P_WrkAge,         # working-age population share
+    AutoOwn0,         # households with no vehicles
+    AutoOwn1,         # households with 1 vehicle
+    AutoOwn2p,        # households with 2+ vehicles
+    R_PCTLOWWAGE,     # % low-wage workers
+    CBSA_POP,         # total population from CBSA (alternate source)
+    CBSA_EMP          # total employment from CBSA (alternate source)
+  )
+
+```
+
+Next, we need to aggregate to the city level. I use weighted averages with population where it makes the most sense (where larger populations should contribute more)
+
+```{r}
+# Aggregate to city/metro level
+city_level <- pop_select %>%
+  group_by(CBSA_Name) %>%
+  summarise(
+    total_population = sum(TotPop, na.rm = TRUE),
+    total_employment = sum(TotEmp, na.rm = TRUE),
+    pop_density_ppa = sum(TotPop * D1A, na.rm = TRUE) / sum(TotPop, na.rm = TRUE),
+    hous_density = sum(TotPop * CountHU, na.rm = TRUE) / sum(TotPop, na.rm = TRUE),
+    land_use_mix_E5 = mean(D2B_E5MIXA, na.rm = TRUE),
+    land_use_mix_E8 = mean(D2B_E8MIXA, na.rm = TRUE),
+    street_connectivity = sum(TotPop * D2C_TRPMX1, na.rm = TRUE) / sum(TotPop, na.rm = TRUE),
+    tree_cover = sum(TotPop * D3A, na.rm = TRUE) / sum(TotPop, na.rm = TRUE),
+    share_working_age = sum(TotPop * P_WrkAge, na.rm = TRUE) / sum(TotPop, na.rm = TRUE),
+    pct_autonone = sum(TotPop * AutoOwn0, na.rm = TRUE) / sum(TotPop, na.rm = TRUE),
+    pct_auto1 = sum(TotPop * AutoOwn1, na.rm = TRUE) / sum(TotPop, na.rm = TRUE),
+    pct_auto2plus = sum(TotPop * AutoOwn2p, na.rm = TRUE) / sum(TotPop, na.rm = TRUE),
+    pct_low_wage_workers = sum(TotPop * R_PCTLOWWAGE, na.rm = TRUE) / sum(TotPop, na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+# View the first few rows
+head(city_level)
+```
+
+
+
+
+## Pollution Data All cities
+
+```{r}
+pm25_raw <- read_csv("../data/daily_88101_2023.csv")
+o3_raw   <- read_csv("../data/daily_44201_2023.csv")
+no2_raw  <- read_csv("../data/daily_42602_2023.csv")
+
+clean_pollutant <- function(df, pollutant_name) {
+  df %>%
+    mutate(Date = ymd(`Date Local`)) %>%         # convert date
+    select(`CBSA Name`, Date, `Arithmetic Mean`) %>%  # select correct columns
+    rename(
+      City = `CBSA Name`,
+      !!pollutant_name := `Arithmetic Mean`
+    )
+} 
+
+pm25 <- clean_pollutant(pm25_raw, "PM25")
+o3   <- clean_pollutant(o3_raw,   "O3")
+no2  <- clean_pollutant(no2_raw,  "NO2")
+
+air_df <- pm25 %>%
+  inner_join(o3, by = c("City", "Date")) %>%
+  inner_join(no2, by = c("City", "Date"))
+
+air_df_clean <- air_df %>%
+  group_by(City) %>%
+  summarise(
+    PM25_mcg = mean(PM25, na.rm = TRUE),
+    O3_ppm   = mean(O3,   na.rm = TRUE),
+    NO2_ppb  = mean(NO2,  na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(City)
+
+```
+
+## Merge the Data
+
+```{r}
+city_data <- left_join(air_df_clean, city_level, by = c("City" = "CBSA_Name")) |> drop_na()
+```
+
+## EDA
+
+```{r}
+
+# Make sure output folder exists
+if(!dir.exists("../charts")) dir.create("../charts")
+
+# List of pollution variables
+pollutants <- c("PM25_mcg", "NO2_ppb", "O3_ppm")
+
+# List of urban/environmental covariates
+covariates <- c(
+  "pop_density_ppa",
+  "hous_density",
+  "total_employment",
+  "land_use_mix_E5",
+  "land_use_mix_E8",
+  "street_connectivity",
+  "tree_cover",
+  "pct_autonone",
+  "pct_auto1",
+  "pct_auto2plus",
+  "pct_low_wage_workers"
+)
+
+# 1. Histograms of pollution levels
+for (p in pollutants) {
+  ggplot(city_data, aes_string(x = p)) +
+    geom_histogram(bins = 30, fill="steelblue", color="black") +
+    theme_minimal() +
+    labs(title = paste("Histogram of", p), x = p, y = "Count") -> plt
+  ggsave(filename = paste0("../charts/hist_", p, ".png"), plot = plt, width = 6, height = 4, bg="white")
+}
+
+# 2. Boxplots of pollution vs. categorical splits (median-split high/low)
+for (p in pollutants) {
+  for (cov in covariates) {
+    # Create median split
+    city_data[[paste0(cov,"_high")]] <- city_data[[cov]] > median(city_data[[cov]], na.rm = TRUE)
+    
+    ggplot(city_data, aes_string(x = paste0(cov,"_high"), y = p)) +
+      geom_boxplot(fill="lightgreen") +
+      theme_minimal() +
+      labs(title = paste(p, "by high/low", cov), x = paste0(cov, " (high=TRUE)"), y = p) -> plt
+    ggsave(filename = paste0("../charts/box_", p, "_", cov, ".png"), plot = plt, width = 6, height = 4, bg="white")
+  }
+}
+
+# 3. Scatterplots of pollution vs. continuous covariates
+for (p in pollutants) {
+  for (cov in covariates) {
+    ggplot(city_data, aes_string(x = cov, y = p)) +
+      geom_point(color="darkred") +
+      geom_smooth(method="lm", se=TRUE, color="blue") +
+      theme_minimal() +
+      labs(title = paste(p, "vs", cov), x = cov, y = p) -> plt
+    ggsave(filename = paste0("../charts/scatter_", p, "_", cov, ".png"), plot = plt, width = 6, height = 4, bg="white")
+  }
+}
+
+# Correlation matrix heatmap
+library(reshape2)
+cor_data <- city_data %>% select(all_of(c(pollutants, covariates))) %>% na.omit()
+cor_mat <- cor(cor_data)
+cor_df <- melt(cor_mat)
+
+ggplot(cor_df, aes(Var1, Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(low="blue", high="red", mid="white", midpoint=0) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle=45, hjust=1)) +
+  labs(title="Correlation Matrix") -> plt
+ggsave("../charts/correlation_matrix.png", plot = plt, width=7, height=6)
+```
+
+
+
+## EDA2
+```{r}
+library(ggplot2)
+library(patchwork)
+library(dplyr)
+
+pollutants <- c("PM25_mcg", "NO2_ppb", "O3_ppm")
+
+covariates <- c(
+  "pop_density_ppa",
+  "hous_density",
+  "total_employment",
+  "land_use_mix_E5",
+  "land_use_mix_E8",
+  "street_connectivity",
+  "tree_cover",
+  "pct_autonone",
+  "pct_auto1",
+  "pct_auto2plus",
+  "pct_low_wage_workers"
+)
+
+#custom theeme for largeer fonts
+my_theme <- theme_minimal() +
+  theme(
+    plot.title = element_text(size = 18, face = "bold"),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 14)
+  )
+
+#Quartile histograms
+for (cov in covariates) {
+  
+  # Create quartile column for this covariate
+  quart_col <- paste0(cov, "_q")
+  city_data[[quart_col]] <- ntile(city_data[[cov]], 4)
+  
+  for (p in pollutants) {
+    plt <- ggplot(city_data, aes(x = factor(.data[[quart_col]]), y = .data[[p]])) +
+      geom_boxplot(fill = "lightblue") +
+      theme_minimal() +
+      labs(
+        title = paste(p, "by", cov, "Quartile"),
+        x = paste0(cov, " Quartile (1=lowest, 4=highest)"),
+        y = p
+      )
+    
+    ggsave(filename = paste0("../charts/box_quartile_", p, "_", cov, ".png"),
+           plot = plt, width = 6, height = 4, bg = "white")
+  }
+}
+
+# Histograms of pollutants
+for (p in pollutants) {
+  plt <- ggplot(city_data, aes_string(x = p)) +
+    geom_histogram(bins = 30, fill="steelblue", color="black") +
+    theme_minimal() +
+    labs(title = paste("Histogram of", p), x = p, y = "Count")+
+    my_theme
+  
+  ggsave(filename = paste0("../charts/hist_", p, ".png"), plot = plt, width = 6, height = 4, bg="white")
+}
+
+# Boxplots and scatterplots side by side
+for (cov in covariates) {
+  
+  # Median split column
+  med_col <- paste0(cov, "_high")
+  city_data[[med_col]] <- city_data[[cov]] > median(city_data[[cov]], na.rm = TRUE)
+  
+  plots <- list()
+  
+  for (p in pollutants) {
+    # Boxplot
+    bp <- ggplot(city_data, aes_string(x = med_col, y = p)) +
+      geom_boxplot(fill="lightgreen") +
+      theme_minimal() +
+      labs(title = paste(p, "by high/low", cov), x = paste0(cov, " (high=TRUE)"), y = p)+
+      my_theme
+    
+    # Scatterplot with linear smooth
+    sp <- ggplot(city_data, aes_string(x = cov, y = p)) +
+      geom_point(color="darkred") +
+      geom_smooth(method="lm", se=TRUE, color="blue") +
+      theme_minimal() +
+      labs(title = paste(p, "vs", cov), x = cov, y = p)+
+      my_theme
+    
+    # Combine side by side
+    plots[[p]] <- bp / sp
+  }
+  
+  # Stack all three pollutants vertically
+  #combined_plot <- plots[[1]] / plots[[2]] / plots[[3]]
+  
+  # Stack all three pollutants horizontally
+  combined_plot <- plots[[1]] | plots[[2]] | plots[[3]]
+  
+  # Save combined plot
+  ggsave(filename = paste0("../charts/horizontal_eda_", cov, ".png"),
+         plot = combined_plot,
+         width = 20, height = 2*5.625, dpi = 300, bg="white")
+}
+```
+
+
+## Hypothesis Testing
+
+```{r}
+library(dplyr)
+library(car)
+library(boot)
+
+# Ensure output folder exists
+if(!dir.exists("../charts")) dir.create("../charts")
+
+# Initialize results table
+results <- data.frame(
+  Pollutant = character(),
+  Covariate = character(),
+  Test = character(),
+  Statistic = numeric(),
+  P_Value = numeric(),
+  Additional_Info = character(),
+  stringsAsFactors = FALSE
+)
+
+shapiro.test(city_data$NO2[city_data$pop_density_ppa_high == TRUE ])
+city_data$pop_density_ppa_group <- ifelse(city_data$pop_density_ppa_high, "High", "Low")
+
+# Levene's test for NO2
+leveneTest(NO2 ~ pop_density_ppa_group, data = city_data)
+
+# Loop over pollutants and covariates
+for(p in pollutants){
+  for(cov in covariates){
+    
+    # Median split
+    city_data[[paste0(cov,"_high")]] <- city_data[[cov]] > median(city_data[[cov]], na.rm=TRUE)
+    
+    # --- t-test or Wilcoxon ---
+    group_vals <- split(city_data[[p]], city_data[[paste0(cov,"_high")]])
+    normality_ok <- all(sapply(group_vals, function(x) shapiro.test(x)$p.value > 0.05))
+    equal_var_ok <- leveneTest(as.formula(paste(p,"~",paste0(cov,"_high"))), data=city_data)$`Pr(>F)`[1] > 0.05
+    
+    if(normality_ok & equal_var_ok){
+      t_res <- t.test(as.formula(paste(p, "~", paste0(cov,"_high"))), data=city_data, var.equal=TRUE)
+      results <- rbind(results, data.frame(
+        Pollutant = p, Covariate = cov, Test = "t-test",
+        Statistic = t_res$statistic, P_Value = t_res$p.value,
+        Additional_Info = ""
+      ))
+    } else {
+      wilcox_res <- wilcox.test(as.formula(paste(p, "~", paste0(cov,"_high"))), data=city_data)
+      results <- rbind(results, data.frame(
+        Pollutant = p, Covariate = cov, Test = "Wilcoxon",
+        Statistic = wilcox_res$statistic, P_Value = wilcox_res$p.value,
+        Additional_Info = ""
+      ))
+    }
+    
+    # --- ANOVA / Kruskal-Wallis ---
+    city_data$quartile <- cut(city_data[[cov]], breaks=quantile(city_data[[cov]], probs=0:4/4, na.rm=TRUE), include.lowest=TRUE)
+    aov_res <- aov(as.formula(paste(p,"~ quartile")), data=city_data)
+    if(shapiro.test(resid(aov_res))$p.value > 0.05 & leveneTest(as.formula(paste(p,"~ quartile")), data=city_data)$`Pr(>F)`[1] > 0.05){
+      results <- rbind(results, data.frame(
+        Pollutant = p, Covariate = cov, Test = "ANOVA",
+        Statistic = summary(aov_res)[[1]][["F value"]][1],
+        P_Value = summary(aov_res)[[1]][["Pr(>F)"]][1],
+        Additional_Info = ""
+      ))
+    } else {
+      kruskal_res <- kruskal.test(as.formula(paste(p,"~ quartile")), data=city_data)
+      results <- rbind(results, data.frame(
+        Pollutant = p, Covariate = cov, Test = "Kruskal-Wallis",
+        Statistic = kruskal_res$statistic, P_Value = kruskal_res$p.value,
+        Additional_Info = ""
+      ))
+    }
+    
+    # --- Chi-square / Fisher ---
+    city_data$poll_high <- city_data[[p]] > median(city_data[[p]], na.rm=TRUE)
+    tbl <- table(city_data$poll_high, city_data[[paste0(cov,"_high")]])
+    if(all(tbl >= 5)){
+      chi_res <- chisq.test(tbl)
+      results <- rbind(results, data.frame(
+        Pollutant = p, Covariate = cov, Test = "Chi-square",
+        Statistic = chi_res$statistic, P_Value = chi_res$p.value,
+        Additional_Info = ""
+      ))
+    } else {
+      fisher_res <- fisher.test(tbl)
+      results <- rbind(results, data.frame(
+        Pollutant = p, Covariate = cov, Test = "Fisher",
+        Statistic = NA, P_Value = fisher_res$p.value,
+        Additional_Info = ""
+      ))
+    }
+    
+    # --- Bootstrap ---
+    boot_diff <- function(data, indices){
+      d <- data[indices,]
+      mean(d[[p]][d[[paste0(cov,"_high")]]]) - mean(d[[p]][!d[[paste0(cov,"_high")]]])
+    }
+    boot_res <- boot(city_data, boot_diff, R=1000)
+    ci <- boot.ci(boot_res, type="perc")$percent[4:5]
+    results <- rbind(results, data.frame(
+      Pollutant = p, Covariate = cov, Test = "Bootstrap 95% CI",
+      Statistic = NA, P_Value = NA,
+      Additional_Info = paste0("CI: [", round(ci[1],2), ", ", round(ci[2],2), "]")
+    ))
+  }
+}
+
+# Save results table
+write.csv(results, "../charts/hypothesis_tests_summary.csv", row.names = FALSE)
+```
+

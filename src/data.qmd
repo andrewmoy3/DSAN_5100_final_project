@@ -40,5 +40,4 @@ air_df_clean <- air_df %>%
 glimpse(air_df_clean)
 ```
 
-
 Data contains 3,367 rows instead of 3,650 because some cities have missing days, some monitoring stations fail to record, etc.
